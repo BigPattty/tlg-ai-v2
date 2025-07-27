@@ -1,106 +1,75 @@
-from discord import user
-from redbot.core import commands, Config, checks, modlog
+from __future__ import annotations
+
 import discord
-import asyncio
-import datetime
-import time
-from pyrate_limiter import (
-	BucketFullException,
-	Duration,
-	RequestRate,
-	Limiter,
-	MemoryListBucket,
-	MemoryQueueBucket,
-)
+from discord.ext import commands
+from redbot.core import commands as redcommands, Config, checks
+from pyrate_limiter import BucketFullException, Duration, RequestRate, Limiter
+from typing import Optional
 
 ERROR_MESSAGES = {
-    'NOTIF_UNRECOGNIZED': "Notification Key was not recognized, please do `!notifs info` to get more info about the keys. List of valid keys: kick, ban, mute, jail, warn, channelperms, editchannel, deletemessages, ratelimit, adminrole, bot",
-    'PERM_UNRECOGNIZED': "Permission Key was not recognized, please do `!modpset perms info` to get more info about the keys. List of valid keys: kick, ban, mute, jail, warn, channelperms, editchannel, deletemessages."
+    'NOTIF_UNRECOGNIZED': (
+        "Notification key not recognized. Use `!notifs info` for valid keys.\n"
+        "Valid: kick, ban, mute, jail, warn, channelperms, editchannel, deletemessages, "
+        "ratelimit, adminrole, bot"
+    ),
+    'PERM_UNRECOGNIZED': (
+        "Permission key not recognized. Use `!modpset perms info` for valid keys.\n"
+        "Valid: kick, ban, mute, jail, warn, channelperms, editchannel, deletemessages"
+    )
 }
 
 PERM_SYS_INFO = """
 **__Permission System Information__**
-**Kick:** Can Kick Members (5 per hour max)
-**Ban:** Can Ban Members (3 per hour max)
-**Mute:** Can Mute Members
-**Jail:** Can Jail Members
-**Warn:** Can Warn Members
-**ChannelPerms:** Can Add / Remove Members from Channels
-**EditChannel:** Can Create, Rename, Enable Slowmode and Move Channels
-**DeleteMessages:** Can Delete and Pin Messages. (50 per hour max)
+**Kick:** Can kick members (5 per hour max)
+**Ban:** Can ban members (3 per hour max)
+**Mute:** Can mute members
+**Jail:** Can jail members
+**Warn:** Can warn members
+**ChannelPerms:** Can add/remove members from channels
+**EditChannel:** Can create, rename, enable slowmode and move channels
+**DeleteMessages:** Can delete and pin messages (50/hour max)
 """
 
 NOTIF_SYS_INFO = """
 **__Notification System Information__**
-You will be DMed on the events that you choose, listed below:
-**Kick:** When someone is kicked
-**Ban:** When someone is banned
-**Mute:** When someone is muted
-**Jail:** When someone is jailed
-**Warn:** When someone is warned
-**ChannelPerms:** When someone has been added / removed from a channel
-**EditChannel:** When a channel has been created, moved or renamed
-**DeleteMessages:** When messages have been deleted (note this will get spammy)
-**RateLimit:** When a moderator has hit a rate limit (recommended)
-**AdminRole:** When a member has been given admin or a role has been given admin (recommended)
-**Bot:** When a bot has been added to the server
+DM or Channel notifications available:
+**Kick, Ban, Mute, Jail, Warn**
+**ChannelPerms, EditChannel, DeleteMessages**
+**RateLimit (when a mod hits a limit)**
+**AdminRole (role gets admin perms)**
+**Bot (when a bot joins)**
 """
 
-
 class ModPlus(commands.Cog):
-    """Ultimate Moderation Cog for RedBot"""
-    def __init__(self, bot):
+    """Modernized Ultimate Moderation Cog for RedBot"""
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.config = Config.get_conf(self, 8818154, force_registration=True)
-        # PyRateLimit.init(redis_host="localhost", redis_port=6379)
-        hourly_rate5 = RequestRate(5, Duration.HOUR)
-        hourly_rate3 = RequestRate(3, Duration.HOUR)
-        self.kicklimiter = Limiter(hourly_rate5)
-        self.banlimiter = Limiter(hourly_rate3)
-        # self.kicklimit = PyRateLimit()
-        # self.kicklimit.create(3600, 5)
-        # self.banlimit = PyRateLimit()
-        # self.banlimit.create(3600, 3)
 
+        self.config = Config.get_conf(self, identifier=8818154, force_registration=True)
+
+        # Rate limits
+        self.kicklimiter = Limiter(RequestRate(5, Duration.HOUR))
+        self.banlimiter = Limiter(RequestRate(3, Duration.HOUR))
+
+        # Default config
         default_global = {
-            'notifs': {
-                'kick': [],
-                'ban': [],
-                'mute': [],
-                'jail': [],
-                'channelperms': [],
-                'editchannel': [],
-                'deletemessages': [],
-                'ratelimit': [],
-                'adminrole': [],
-                'bot':[],
-                'warn':[]
-            },
-            'notifchannels' : {
-                'kick': [],
-                'ban': [],
-                'mute': [],
-                'jail': [],
-                'channelperms': [],
-                'editchannel': [],
-                'deletemessages': [],
-                'ratelimit': [],
-                'adminrole': [],
-                'bot':[],
-                'warn':[]
-            }
+            'notifs': {k: [] for k in [
+                'kick', 'ban', 'mute', 'jail', 'channelperms',
+                'editchannel', 'deletemessages', 'ratelimit',
+                'adminrole', 'bot', 'warn'
+            ]},
+            'notifchannels': {k: [] for k in [
+                'kick', 'ban', 'mute', 'jail', 'channelperms',
+                'editchannel', 'deletemessages', 'ratelimit',
+                'adminrole', 'bot', 'warn'
+            ]}
         }
+
         default_guild = {
-            'perms': {
-                'kick': [],
-                'ban': [],
-                'mute': [],
-                'jail': [],
-                'channelperms': [],
-                'editchannel': [],
-                'deletemessages': [],
-                'warn': []
-            },
+            'perms': {k: [] for k in [
+                'kick', 'ban', 'mute', 'jail', 'channelperms',
+                'editchannel', 'deletemessages', 'warn'
+            ]},
             'roles': {
                 'warning1': None,
                 'warning2': None,
@@ -109,364 +78,289 @@ class ModPlus(commands.Cog):
                 'muted': None
             }
         }
-        self.config.register_guild(**default_guild)   
-        self.config.register_global(**default_global)   
-        self.permkeys = [
-            'kick',
-            'ban',
-            'mute',
-            'jail',
-            'channelperms',
-            'editchannel',
-            'deletemessages',
-            'warn'
-        ]
-        self.notifkeys = [
-            'kick',
-            'ban',
-            'mute',
-            'jail',
-            'channelperms',
-            'editchannel',
-            'deletemessages',
-            'ratelimit',
-            'adminrole',
-            'bot',
-            'warn'
-        ]
-        self.rolekeys = [
-            'warning1',
-            'warning2',
-            'warning3+',
-            'jailed',
-            'muted'
-        ]
 
-    # Notifications Part
+        self.config.register_guild(**default_guild)
+        self.config.register_global(**default_global)
 
-    @commands.group(aliases=['notifs', 'notif']) # CHANNEL
+        self.permkeys = list(default_guild['perms'].keys())
+        self.notifkeys = list(default_global['notifs'].keys())
+
+    # ====================
+    # NOTIFICATION COMMANDS
+    # ====================
+
+    @redcommands.group(aliases=['notifs', 'notif'])
     @checks.mod()
-    async def adminnotifications(self, ctx):
+    async def adminnotifications(self, ctx: redcommands.Context):
         """Configure what notifications to get"""
         pass
 
     @adminnotifications.group(name='channel')
-    async def notifschannel(self, ctx):
-        """Configure a channel to recieve notifications"""
+    async def notifschannel(self, ctx: redcommands.Context):
+        """Configure a channel to receive notifications"""
         pass
 
     @adminnotifications.command(name='info')
-    async def notifsinfo(self, ctx):
-        """Get information about notification system"""
+    async def notifsinfo(self, ctx: redcommands.Context):
+        """Get info about notification system"""
         await ctx.send(NOTIF_SYS_INFO)
 
     @adminnotifications.command(name='add')
-    async def notifsadd(self, ctx, notifkey: str, user: discord.Member = None):
-        """Get notified about something"""
-        if user is None:
-            user = ctx.author
-        notifkey = notifkey.strip().lower()
+    async def notifsadd(self, ctx: redcommands.Context, notifkey: str, user: Optional[discord.Member] = None):
+        """Subscribe to a notification key"""
+        user = user or ctx.author
+        notifkey = notifkey.lower().strip()
+
         if notifkey not in self.notifkeys:
             return await ctx.send(ERROR_MESSAGES['NOTIF_UNRECOGNIZED'])
 
-        data = await self.config.notifs()
-        if user.id in data[notifkey]:
-            return await ctx.send(f"{user.display_name} is already getting notified about {notifkey}")
+        async with self.config.notifs() as notifs:
+            if user.id in notifs[notifkey]:
+                return await ctx.send(f"{user.display_name} is already subscribed to {notifkey}.")
+            notifs[notifkey].append(user.id)
 
-
-        data[notifkey].append(user.id)
-        await self.config.notifs.set(data)
-        return await ctx.send(f"{user.display_name} will now be notified on {notifkey}")
+        await ctx.send(f"{user.display_name} will now be notified for `{notifkey}`.")
 
     @adminnotifications.command(name='remove')
-    async def notifsremove(self, ctx, notifkey: str, user: discord.Member = None):
-        """Stop getting notified about something"""
-        if user is None:
-            user = ctx.author
-        notifkey = notifkey.strip().lower()
+    async def notifsremove(self, ctx: redcommands.Context, notifkey: str, user: Optional[discord.Member] = None):
+        """Unsubscribe from a notification key"""
+        user = user or ctx.author
+        notifkey = notifkey.lower().strip()
+
         if notifkey not in self.notifkeys:
             return await ctx.send(ERROR_MESSAGES['NOTIF_UNRECOGNIZED'])
 
-        data = await self.config.notifs()
-        if user.id not in data[notifkey]:
-            return await ctx.send(f"{user.display_name} isn't currently getting notified about {notifkey}")
-        
-        data[notifkey].remove(user.id)
-        await self.config.notifs.set(data)
-        return await ctx.send(f"{user.display_name} will now stop being notified about {notifkey}")
+        async with self.config.notifs() as notifs:
+            if user.id not in notifs[notifkey]:
+                return await ctx.send(f"{user.display_name} is not subscribed to {notifkey}.")
+            notifs[notifkey].remove(user.id)
 
-    # SHOW NOTIFICATIONS
+        await ctx.send(f"{user.display_name} will no longer be notified for `{notifkey}`.")
+
     @adminnotifications.command(name='list')
-    async def notifslist(self, ctx, user: discord.Member = None):
-        """Show which notifications you / a user has enabled"""
-        if user is None:
-            user = ctx.author
+    async def notifslist(self, ctx: redcommands.Context, user: Optional[discord.Member] = None):
+        """Show which notifications you (or someone) are subscribed to"""
+        user = user or ctx.author
         data = await self.config.notifs()
-        notifs = []
-        for notif in data:
-            if user.id in data[notif]:
-                notifs.append(notif)
-        await ctx.send(f'{user.display_name} is getting notified for the following: ' + ', '.join(notifs))
+        subscribed = [k for k, v in data.items() if user.id in v]
+
+        if not subscribed:
+            return await ctx.send(f"{user.display_name} has no active notifications.")
+        await ctx.send(f"{user.display_name} is subscribed to: **{', '.join(subscribed)}**")
 
     # Channel notifications
     @notifschannel.command(name='add')
-    async def channelnotifsadd(self, ctx, notifkey: str, channel: discord.TextChannel):
-        """Get notified about something (channel)"""
-        notifkey = notifkey.strip().lower()
+    async def channelnotifsadd(self, ctx: redcommands.Context, notifkey: str, channel: discord.TextChannel):
+        """Subscribe a channel to a notification key"""
+        notifkey = notifkey.lower().strip()
+
         if notifkey not in self.notifkeys:
             return await ctx.send(ERROR_MESSAGES['NOTIF_UNRECOGNIZED'])
 
-        data = await self.config.notifchannels()
-        channeldata = [channel.guild.id, channel.id]
-        if channeldata in data[notifkey]:
-            return await ctx.send(f"{channel.name} is already getting notified about {notifkey}")
+        async with self.config.notifchannels() as channels:
+            keylist = channels[notifkey]
+            channeldata = [channel.guild.id, channel.id]
 
-        data[notifkey].append(channeldata)
-        await self.config.notifchannels.set(data)
-        return await ctx.send(f"{channel.name} will now be notified on {notifkey}")
+            if channeldata in keylist:
+                return await ctx.send(f"{channel.name} is already subscribed to {notifkey}.")
+
+            keylist.append(channeldata)
+
+        await ctx.send(f"{channel.name} will now receive `{notifkey}` notifications.")
 
     @notifschannel.command(name='remove')
-    async def channelnotifsremove(self, ctx, notifkey: str, channel: discord.TextChannel):
-        """Stop getting notified about something (channel)"""
-        notifkey = notifkey.strip().lower()
+    async def channelnotifsremove(self, ctx: redcommands.Context, notifkey: str, channel: discord.TextChannel):
+        """Unsubscribe a channel from a notification key"""
+        notifkey = notifkey.lower().strip()
+
         if notifkey not in self.notifkeys:
             return await ctx.send(ERROR_MESSAGES['NOTIF_UNRECOGNIZED'])
 
-        data = await self.config.notifchannels()
-        channeldata = [channel.guild.id, channel.id]
-        if channeldata not in data[notifkey]:
-            return await ctx.send(f"{channel.name} isn't currently getting notified about {notifkey}")
-        
-        data[notifkey].remove(channeldata)
-        await self.config.notifchannels.set(data)
-        return await ctx.send(f"{channel.name} will now stop being notified about {notifkey}")
+        async with self.config.notifchannels() as channels:
+            keylist = channels[notifkey]
+            channeldata = [channel.guild.id, channel.id]
+
+            if channeldata not in keylist:
+                return await ctx.send(f"{channel.name} isn’t subscribed to {notifkey}.")
+            keylist.remove(channeldata)
+
+        await ctx.send(f"{channel.name} will no longer receive `{notifkey}` notifications.")
 
     @notifschannel.command(name='list')
-    async def channelnotifslist(self, ctx, channel: discord.TextChannel):
-        """Show which notifications a channel has enabled"""
+    async def channelnotifslist(self, ctx: redcommands.Context, channel: discord.TextChannel):
+        """List notifications for a channel"""
         data = await self.config.notifchannels()
         channeldata = [channel.guild.id, channel.id]
-        notifs = []
-        for notif in data:
-            if channeldata in data[notif]:
-                notifs.append(notif)
-        await ctx.send(f'{channel.name} is getting notified for the following: ' + ', '.join(notifs))
-    
+        subscribed = [k for k, v in data.items() if channeldata in v]
 
+        if not subscribed:
+            return await ctx.send(f"{channel.name} has no active notifications.")
+        await ctx.send(f"{channel.name} is subscribed to: **{', '.join(subscribed)}**")
+
+    # ================
     # NOTIFY FUNCTION
-    async def notify(self, notifkey, payload):
+    # ================
+    async def notify(self, notifkey: str, payload: str):
+        """Send notifications to users & channels"""
         data = await self.config.all()
-        for userid in data['notifs'][notifkey]:
-            user: discord.User = await self.bot.fetch_user(userid)
+
+        # Notify users
+        for uid in data['notifs'][notifkey]:
             try:
+                user = await self.bot.fetch_user(uid)
                 await user.send(payload)
-            except Exception:
-                pass
-        for channel in data['notifchannels'][notifkey]:
-            guild: discord.guild = self.bot.get_guild(channel[0])
-            if guild is not None:
-                txtchannel = guild.get_channel(channel[1])
-            try:
-                await txtchannel.send(payload, allowed_mentions=discord.AllowedMentions.all())
-            except Exception:
-                pass
+            except discord.Forbidden:
+                self.bot.logger.warning(f"Cannot DM user {uid} for {notifkey}")
+            except Exception as e:
+                self.bot.logger.error(f"Error DMing user {uid}: {e}")
 
+        # Notify channels
+        for guild_id, chan_id in data['notifchannels'][notifkey]:
+            guild = self.bot.get_guild(guild_id)
+            if guild:
+                channel = guild.get_channel(chan_id)
+                if channel:
+                    try:
+                        await channel.send(payload, allowed_mentions=discord.AllowedMentions.all())
+                    except Exception as e:
+                        self.bot.logger.error(f"Error notifying {channel.id} for {notifkey}: {e}")
 
-    # Admin Logging
+    # ====================
+    # ADMIN LISTENERS
+    # ====================
     @commands.Cog.listener(name='on_guild_role_update')
     async def role_add_admin(self, old: discord.Role, new: discord.Role):
         if new.permissions.administrator and not old.permissions.administrator:
-            await self.notify('adminrole', f'@everyone Role {new.mention}({new.id}) was updated to contain administrator permission. \n IN: {old.guild.name}({old.guild.id})')
+            await self.notify('adminrole', f"@everyone Role {new.mention} now has admin perms in **{old.guild.name}** ({old.guild.id})")
 
     @commands.Cog.listener(name='on_member_join')
     async def join_bot(self, member: discord.Member):
-        """Detect if new joining member is a bot"""
         if member.bot:
-            await self.notify('bot', f'@everyone Role Bot {member.mention}({member.id}) was added. \n IN: {member.guild.name}({member.guild.id})')
-    
+            await self.notify('bot', f"@everyone Bot {member.mention} joined **{member.guild.name}** ({member.guild.id})")
+
     @commands.Cog.listener(name='on_member_update')
     async def member_admin(self, old: discord.Member, new: discord.Member):
-        new_roles = []
-        for role in new.roles:
-            if role not in old.roles:
-                new_roles.append(role)
+        new_roles = [r for r in new.roles if r not in old.roles]
         for role in new_roles:
             if role.permissions.administrator:
-                await self.notify('adminrole', f'@everyone Member{new.mention}({new.id}) was updated to contain administrator permission. \n IN: {old.guild.name}({old.guild.id})')
+                await self.notify('adminrole', f"@everyone {new.mention} gained admin perms via {role.mention} in **{old.guild.name}**")
 
+    # ====================
+    # RATE LIMIT HANDLING
+    # ====================
+    async def rate_limit_exceeded(self, user: discord.Member, action_type: str):
+        """Remove mod roles when exceeding rate limits"""
+        guild_data = await self.config.guild(user.guild).perms()
+        allmodroles = {r for roles in guild_data.values() for r in roles}
 
-    async def rate_limit_exceeded(self, user: discord.Member, type):
-        """Called to removed all moderation roles when a mod has hit ratelimit"""
-        allmodroles = []
-        data = await self.config.guild(user.guild).perms()
-        for perm in data:
-            for role in data[perm]:
-                if role not in allmodroles:
-                    allmodroles.append(role)
-        rm_mention = []
-        broken = []
-        issue = False
+        removed, failed = [], []
         for role in user.roles:
             if role.id in allmodroles:
                 try:
                     await user.remove_roles(role, reason='Rate limit exceeded.')
-                    rm_mention.append(role.mention)
-                    rm_mention.append('(' + str(role.id) + ')')
-                except Exception:
-                    issue = True
-                    broken.append(role.mention)
-                    broken.append('(' + str(role.id) + ')')
-            
-        if issue:
-            await self.notify('ratelimit', "Removing roles in the ratelimit below ended in error. The user has a role above the bot. The following roles could not be removed: " + ', '.join(broken))
-        payload = f"@everyone {type} ratelimit has been exceeded by {user.mention} ({user.display_name}, {user.id}). The following roles with power have been removed: " + ', '.join(rm_mention)
-        await self.notify('ratelimit', payload)
+                    removed.append(f"{role.mention}({role.id})")
+                except discord.Forbidden:
+                    failed.append(f"{role.mention}({role.id})")
 
+        if failed:
+            await self.notify('ratelimit', f"Failed to remove: {', '.join(failed)}")
 
-    async def action_check(self, ctx, permkey):
-        if await self.bot.is_admin(ctx.author) or await self.bot.is_owner(ctx.author) or ctx.author.guild_permissions.administrator: # Admin auto-bypass
+        await self.notify('ratelimit',
+            f"@everyone {action_type} ratelimit exceeded by {user.mention}. Removed: {', '.join(removed)}"
+        )
+
+    async def action_check(self, ctx: redcommands.Context, permkey: str) -> bool:
+        """Check if user can run an action + rate limit"""
+        if await self.bot.is_admin(ctx.author) or ctx.author.guild_permissions.administrator:
             return True
-        data = await self.config.guild(ctx.guild).all()
-        canrun = False
-        for role in ctx.author.roles:
-            if role.id in data['perms'][permkey]:
-                canrun = True
-                break
-        if not canrun:
+
+        perms = await self.config.guild(ctx.guild).perms()
+        if not any(r.id in perms[permkey] for r in ctx.author.roles):
             return False
-        if permkey == 'kick':
+
+        limiter = self.kicklimiter if permkey == 'kick' else self.banlimiter if permkey == 'ban' else None
+        if limiter:
             try:
-                self.kicklimiter.try_acquire(str(ctx.author.id))
+                limiter.try_acquire(str(ctx.author.id))
             except BucketFullException:
-                await self.rate_limit_exceeded(ctx.author, 'kick')
-                return False
-        elif permkey == 'ban':
-            try:
-                self.banlimiter.try_acquire(str(ctx.author.id))
-            except BucketFullException:
-                await self.rate_limit_exceeded(ctx.author, 'kick')
+                await self.rate_limit_exceeded(ctx.author, permkey)
                 return False
         return True
 
-
-    @commands.group()
+    # ====================
+    # MOD PERMISSION CMDS
+    # ====================
+    @redcommands.group()
     @checks.admin()
-    async def modpset(self, ctx):
+    async def modpset(self, ctx: redcommands.Context):
         """Configure Mod Plus"""
         pass
 
     @modpset.group(aliases=['perms', 'perm'])
-    async def permissions(self, ctx):
+    async def permissions(self, ctx: redcommands.Context):
         """Configure Role Permissions"""
         pass
 
     @permissions.command(name='info')
-    async def permsinfo(self, ctx):
+    async def permsinfo(self, ctx: redcommands.Context):
         """Get info about perms system"""
         await ctx.send(PERM_SYS_INFO)
 
     @permissions.command(name='add')
-    async def permsadd(self, ctx, role: discord.Role, *, permkey: str):
-        """Add Perms to a Role"""
-        permkey = permkey.strip().lower()
+    async def permsadd(self, ctx: redcommands.Context, role: discord.Role, *, permkey: str):
+        """Grant a permission key to a role"""
+        permkey = permkey.lower().strip()
         if permkey not in self.permkeys:
             return await ctx.send(ERROR_MESSAGES['PERM_UNRECOGNIZED'])
 
         data = await self.config.guild(ctx.guild).get_raw("perms", permkey)
-
         if role.id in data:
-            return await ctx.send(f"{role.name} already has the {permkey} permission")
+            return await ctx.send(f"{role.name} already has `{permkey}` permission.")
 
         data.append(role.id)
         await self.config.guild(ctx.guild).set_raw("perms", permkey, value=data)
-        return await ctx.send(f"{role.name} was sucessfully given the {permkey} permission")
+        await ctx.send(f"✅ {role.name} was granted `{permkey}` permission.")
 
     @permissions.command(name='remove')
-    async def permsremove(self, ctx, role: discord.Role, *, permkey: str):
-        """Revoke Perms from a Role"""
-        permkey = permkey.strip().lower()
+    async def permsremove(self, ctx: redcommands.Context, role: discord.Role, *, permkey: str):
+        """Revoke a permission key from a role"""
+        permkey = permkey.lower().strip()
         if permkey not in self.permkeys:
             return await ctx.send(ERROR_MESSAGES['PERM_UNRECOGNIZED'])
 
         data = await self.config.guild(ctx.guild).get_raw("perms", permkey)
         if role.id not in data:
-            return await ctx.send(f"{role.name} doesn't have the {permkey} permission")
+            return await ctx.send(f"{role.name} doesn’t have `{permkey}` permission.")
         data.remove(role.id)
         await self.config.guild(ctx.guild).set_raw("perms", permkey, value=data)
-        return await ctx.send(f"{role.name} has sucessfully been revoked the {permkey} permission")
-    
+        await ctx.send(f"✅ `{permkey}` permission revoked from {role.name}.")
+
     @permissions.group(name='list')
-    async def permslist(self, ctx):
+    async def permslist(self, ctx: redcommands.Context):
         """List Permissions"""
         pass
 
     @permslist.command(name='perm', aliases=['perms', 'permission'])
-    async def list_perm_by_perm(self, ctx, *, permkey):
-        """List Roles which have the given perm"""
-        permkey = permkey.strip().lower()
+    async def list_perm_by_perm(self, ctx: redcommands.Context, *, permkey: str):
+        """List roles that have a specific permission key"""
+        permkey = permkey.lower().strip()
         if permkey not in self.permkeys:
             return await ctx.send(ERROR_MESSAGES['PERM_UNRECOGNIZED'])
 
         data = await self.config.guild(ctx.guild).get_raw("perms", permkey)
-        rolenames = []
-        for roleid in data:
-            role = ctx.guild.get_role(roleid)
-            if role is None:
-                continue
-            rolenames.append(role.mention)
-        output = f"Roles that have {permkey} permission: " + ', '.join(rolenames)
-        if len(rolenames) == 0:
-            output = f"No Roles have the {permkey} permission."
-        await ctx.send(output)
-    
+        mentions = [ctx.guild.get_role(r).mention for r in data if ctx.guild.get_role(r)]
+        if mentions:
+            await ctx.send(f"Roles with `{permkey}`: {', '.join(mentions)}")
+        else:
+            await ctx.send(f"No roles currently have `{permkey}` permission.")
+
     @permslist.command(name='role')
-    async def list_perms_by_role(self, ctx, role: discord.Role):
+    async def list_perms_by_role(self, ctx: redcommands.Context, role: discord.Role):
         """List which permissions a role has"""
         data = await self.config.guild(ctx.guild).perms()
-        perms = []
-        for permkey in data:
-            if role.id in data[permkey]:
-                perms.append(permkey)
-        if len(perms) == 0:
-            await ctx.send(f"{role.name} has no permissions.")
+        perms = [k for k, v in data.items() if role.id in v]
+
+        if perms:
+            await ctx.send(f"{role.name} has: {', '.join(perms)}")
         else:
-            output = f"{role.name} has the following for permisssions: " + ', '.join(perms)
-            await ctx.send(output)
-
-
-    # Role Config Probably Delte
-
-    # @modpset.command(name='role')
-    # async def setrole(self, ctx, role: discord.Role, *, rolekey):
-    #     """Set the coresponding role"""
-    #     rolekey = rolekey.strip().lower()
-    #     if rolekey not in self.rolekeys:
-    #         return await ctx.send("Role Key was not recognized. List of valid keys: warning1, warning2, warning3+, jailed, muted")
-    #     data = await self.config.guild(ctx.guild).roles()
-    #     data[rolekey] = role.id
-    #     await self.config.guild(ctx.guild).roles.set(data)
-    #     await ctx.send(f'{rolekey} was set to {role.mention}.')
-
-    # @modpset.command(name='showroles')
-    # async def set_showroles(self, ctx):
-    #     """Show which role is attributed to which key"""
-    #     output = "__**Role Configuration:**__"
-    #     data = await self.config.guild(ctx.guild).roles()
-    #     for rolekey in data:
-    #         if data[rolekey] is None:
-    #             output += f"\n**{rolekey}**: Not Set"
-    #         else:
-    #             role = ctx.guild.get_role(data[rolekey])
-    #             output += f"\n**{rolekey}**: {role.mention}"
-    #     await ctx.send(output)
-
-    # @modpset.command()
-    # async def createmutedrole(self, ctx):
-    #     """Create a muted role with all channel overrides. This will override an already set muted role"""
-    #     async with ctx.typing():
-    #         guild: discord.Guild = ctx.guild
-    #         mutedrole : discord.Role = guild.create_role(name="Muted", reason="Muted Role Creation")
-    #         for channel in guild.text_channels:
-    #             channel.set_permissions(mutedrole, send_messages=False)
-
-        
+            await ctx.send(f"{role.name} has no permissions.")
